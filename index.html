@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Schaakrobot bordcamera</title>
+<style>
+/*
+VOICE: werkplaats-tool, rustig en duidelijk, voor vader en zoon aan de tafel
+IDEA: een houten schaakbord met een LEGO-groene meetlat erover
+PICTURE: het camerabeeld met het berekende 8x8-raster erop, groot bovenaan
+COLOUR and TYPE: crème bordhout, donkerpaars veld, LEGO-turquoise accent; Atkinson Hyperlegible
+LAYOUT: één kolom: beeld, knoppen, rechtgetrokken bord, uitslag
+*/
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap');
+:root{color-scheme:light dark;--bg:light-dark(#f4ecdc,#1b1520);--card:light-dark(#fffaf0,#261e2c);--ink:light-dark(#2a1f2d,#f1e9da);--mut:light-dark(#76687a,#a99cad);--line:light-dark(#e2d5bb,#3a2f40);--acc:#0b9c90;--hot:#e2552f}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 'Atkinson Hyperlegible',system-ui,sans-serif;overflow-x:clip}
+main{max-width:760px;margin:0 auto;padding:16px max(4vw,14px) 40px}
+h1{font-size:30px;line-height:1.05;margin:6px 0 4px;text-wrap:balance}
+.sub{color:var(--mut);margin:0 0 14px;font-size:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+h2{font-size:18px;margin:0 0 8px}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+button,.filebtn{font:inherit;font-size:16px;min-height:44px;padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible,.filebtn:focus-within{outline:3px solid var(--acc);outline-offset:2px}
+.filebtn{position:relative;overflow:hidden}.filebtn input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:100px}
+#live{width:100%;border-radius:10px;background:#000;touch-action:none;display:block;min-height:180px}
+#msg{margin:10px 0 0;min-height:1.5em;font-weight:700}
+.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.row canvas{width:100%;aspect-ratio:1;border-radius:8px;display:block;background:#000}
+.lbl{font-size:13px;color:var(--mut);margin:0 0 4px}
+#grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;margin-top:6px}
+#grid div{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:13px;border-radius:4px;line-height:1.1;font-variant-numeric:tabular-nums}
+#grid div b{font-size:13px;opacity:.75;font-weight:400}
+#result{font-size:20px;font-weight:700;margin:12px 0 0}
+label{font-size:14px;color:var(--mut);display:block;margin-top:10px}
+input[type=range]{width:100%;accent-color:var(--acc);height:32px}
+ol{margin:6px 0 0;padding-left:20px;color:var(--mut);font-size:15px}
+#pos{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));max-width:360px;border:3px solid #4a3540;border-radius:4px;margin:6px 0 10px}
+#pos div{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:clamp(20px,6.5vw,34px);line-height:1;color:#1a1214}
+#pos .lt{background:#efe2c4}#pos .dk{background:#8a6a74}
+#pos .hl{box-shadow:inset 0 0 0 3px var(--hot)}
+#moveRes{font-size:20px;font-weight:700;margin:4px 0 8px}
+@media(max-width:480px){h1{font-size:26px}#grid div{font-size:11px}#grid div b{font-size:11px}}
+</style>
+</head>
+<body>
+<main>
+<h1>Schaakrobot: bordcamera, stap 1</h1>
+<p class="sub">Kalibreer het bord en kijk welke vakjes veranderen na een zet.</p>
+
+<div class="card">
+  <canvas id="live" width="640" height="360"></canvas>
+  <p id="msg">Kies live camera of maak een foto.</p>
+  <div class="btns" style="margin-top:10px">
+    <button id="bCam" class="pri">Live camera</button>
+    <label class="filebtn" for="fileCam">Foto maken<input id="fileCam" type="file" accept="image/*" capture="environment"></label>
+    <label class="filebtn" for="fileIn">Uit galerij<input id="fileIn" type="file" accept="image/*"></label>
+    <button id="bVRot" disabled>Draai camerabeeld</button>
+    <button id="bCal" disabled>Kalibreren</button>
+    <button id="bRot" disabled>Draai bord 90°</button>
+    <label class="filebtn" style="gap:6px">Camera bij<select id="camSide" style="font:inherit;font-size:16px;background:transparent;color:inherit;border:0"><option value="b">zwart</option><option value="w">wit</option></select></label>
+    <button id="bRef" disabled>Vóór vastleggen</button>
+    <button id="bCur" disabled>Na vastleggen</button>
+    <button id="bNext" disabled>Na wordt nieuwe vóór</button>
+  </div>
+  <div class="btns" style="margin-top:10px"><button id="bAuto" class="pri" disabled>Automatisch: uit</button></div>
+  <p id="autoStat" class="lbl" style="margin-top:6px"></p>
+</div>
+
+<div class="card">
+  <h2>Partij</h2>
+  <p id="turn" class="lbl"></p>
+  <div id="pos"></div>
+  <p id="moveRes">Leg vóór en na vast om een zet te herkennen.</p>
+  <div id="cands" class="btns"></div>
+  <p id="hist" class="lbl" style="margin-top:10px"></p>
+  <div class="btns" style="margin-top:8px"><button id="bNew">Nieuwe partij</button><button id="bSide">Wissel wie aan zet is</button><button id="bUndo">Zet terugnemen</button></div>
+</div>
+
+<div class="card">
+  <h2>Rechtgetrokken bord</h2>
+  <div class="row">
+    <div><p class="lbl">Vóór</p><canvas id="cRef" width="320" height="320"></canvas></div>
+    <div><p class="lbl">Na</p><canvas id="cCur" width="320" height="320"></canvas></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Verschil per vakje</h2>
+  <div id="grid"></div>
+  <p id="result">Nog geen vergelijking.</p>
+  <label for="thr">Drempel: <span id="thrV">22</span></label>
+  <input id="thr" type="range" min="5" max="80" value="22">
+  <label><input id="nearHalf" type="checkbox" checked style="width:auto;height:auto"> Alleen de voorste helft van elk vakje meten (minder last van hoge stukken die erachter vallen)</label>
+</div>
+
+<div class="card">
+  <h2>Zo gebruik je het</h2>
+  <ol>
+    <li>Zet de telefoon vast achter het bord, zo hoog mogelijk. Hij mag daarna niet meer bewegen.</li>
+    <li>Kalibreer op een <b>leeg bord</b>: druk op Kalibreren en tik de vier hoeken van de vakjes aan (niet de houten rand), in willekeurige volgorde. Houd je vinger vast en schuif; het vergrootglas laat zien waar het kruisje staat. Daarna kun je een stip nog verslepen.</li>
+    <li>De pagina zoekt zelf uit welke hoek a1 is (kies bij 'Camera bij' aan welke kant de telefoon staat). Het rechtgetrokken bord laat het bord altijd zien vanaf wit: wit onderaan, zwart bovenaan. Klopt dat niet, druk dan op Draai bord 90°.</li>
+    <li>Zet daarna de stukken neer. De kalibratie blijft bewaard zolang de telefoon niet beweegt. Het geeft niet als de bovenkant van hoge stukken buiten beeld valt.</li>
+    <li>Rijd de robot uit beeld en druk op Vóór vastleggen.</li>
+    <li>Doe een zet en druk op Na vastleggen. De veranderde vakjes kleuren oranje.</li>
+    <li>Werk je met foto's? Maak eerst een foto en druk dan pas op de knop.</li>
+  </ol>
+</div>
+</main>
+
+<script>
+// Kleine schaakregels-module: legale zetten, zonder externe bibliotheek.
+// Vakje = rij*8 + lijn (rij 0 = rij 1, lijn 0 = a).
+const Chess = (() => {
+  const FILES = 'abcdefgh';
+  const name = sq => FILES[sq & 7] + ((sq >> 3) + 1);
+  const isW = p => p && p === p.toUpperCase();
+  const KN = [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]];
+  const KG = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+  const RO = [[1,0],[-1,0],[0,1],[0,-1]], BI = [[1,1],[1,-1],[-1,1],[-1,-1]];
+
+  function start() {
+    const b = Array(64).fill('');
+    const back = 'RNBQKBNR';
+    for (let f = 0; f < 8; f++) {
+      b[f] = back[f]; b[8 + f] = 'P';
+      b[48 + f] = 'p'; b[56 + f] = back[f].toLowerCase();
+    }
+    return { b, turn: 'w', castle: { K: 1, Q: 1, k: 1, q: 1 }, ep: -1 };
+  }
+
+  function attacked(b, sq, byWhite) {
+    const f = sq & 7, r = sq >> 3;
+    const at = (ff, rr) => (ff >= 0 && ff < 8 && rr >= 0 && rr < 8) ? b[rr * 8 + ff] : null;
+    const own = p => p && isW(p) === byWhite;
+    const pr = byWhite ? r - 1 : r + 1, pp = byWhite ? 'P' : 'p';
+    if (at(f - 1, pr) === pp || at(f + 1, pr) === pp) return true;
+    for (const [df, dr] of KN) { const p = at(f + df, r + dr); if (own(p) && p.toUpperCase() === 'N') return true; }
+    for (const [df, dr] of KG) { const p = at(f + df, r + dr); if (own(p) && p.toUpperCase() === 'K') return true; }
+    for (const [dirs, kinds] of [[RO, 'RQ'], [BI, 'BQ']]) for (const [df, dr] of dirs) {
+      let ff = f + df, rr = r + dr;
+      while (ff >= 0 && ff < 8 && rr >= 0 && rr < 8) {
+        const p = b[rr * 8 + ff];
+        if (p) { if (own(p) && kinds.includes(p.toUpperCase())) return true; break; }
+        ff += df; rr += dr;
+      }
+    }
+    return false;
+  }
+
+  function pseudo(s) {
+    const { b } = s, white = s.turn === 'w', out = [];
+    const add = (from, to, extra) => out.push(Object.assign({ from, to }, extra || {}));
+    for (let sq = 0; sq < 64; sq++) {
+      const p = b[sq]; if (!p || isW(p) !== white) continue;
+      const f = sq & 7, r = sq >> 3, t = p.toUpperCase();
+      const tgt = (ff, rr) => (ff >= 0 && ff < 8 && rr >= 0 && rr < 8) ? rr * 8 + ff : -1;
+      if (t === 'P') {
+        const dir = white ? 1 : -1, last = white ? 7 : 0, home = white ? 1 : 6;
+        const one = tgt(f, r + dir);
+        if (one >= 0 && !b[one]) {
+          add(sq, one, (r + dir) === last ? { promo: 'q' } : null);
+          const two = tgt(f, r + 2 * dir);
+          if (r === home && !b[two]) add(sq, two, { flag: 'double' });
+        }
+        for (const df of [-1, 1]) {
+          const c = tgt(f + df, r + dir); if (c < 0) continue;
+          if (b[c] && isW(b[c]) !== white) add(sq, c, (r + dir) === last ? { promo: 'q' } : null);
+          else if (c === s.ep) add(sq, c, { flag: 'ep' });
+        }
+      } else {
+        const steps = t === 'N' ? KN : t === 'K' ? KG : null;
+        if (steps) {
+          for (const [df, dr] of steps) { const c = tgt(f + df, r + dr); if (c >= 0 && (!b[c] || isW(b[c]) !== white)) add(sq, c); }
+        } else {
+          const dirs = t === 'R' ? RO : t === 'B' ? BI : RO.concat(BI);
+          for (const [df, dr] of dirs) {
+            let ff = f + df, rr = r + dr;
+            while (ff >= 0 && ff < 8 && rr >= 0 && rr < 8) {
+              const c = rr * 8 + ff;
+              if (b[c]) { if (isW(b[c]) !== white) add(sq, c); break; }
+              add(sq, c); ff += df; rr += dr;
+            }
+          }
+        }
+        if (t === 'K') {
+          const base = white ? 0 : 56, kc = white ? 'K' : 'k', qc = white ? 'Q' : 'q';
+          if (sq === base + 4 && !attacked(b, sq, !white)) {
+            if (s.castle[kc] && !b[base + 5] && !b[base + 6] && !attacked(b, base + 5, !white))
+              add(sq, base + 6, { flag: 'castleK' });
+            if (s.castle[qc] && !b[base + 3] && !b[base + 2] && !b[base + 1] && !attacked(b, base + 3, !white))
+              add(sq, base + 2, { flag: 'castleQ' });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  function apply(s, m) {
+    const b = s.b.slice(), white = s.turn === 'w', p = b[m.from];
+    b[m.to] = m.promo ? (white ? 'Q' : 'q') : p; b[m.from] = '';
+    if (m.flag === 'ep') b[m.to + (white ? -8 : 8)] = '';
+    if (m.flag === 'castleK') { b[m.to - 1] = b[m.to + 1]; b[m.to + 1] = ''; }
+    if (m.flag === 'castleQ') { b[m.to + 1] = b[m.to - 2]; b[m.to - 2] = ''; }
+    const castle = Object.assign({}, s.castle);
+    for (const [sq, k] of [[4, 'KQ'], [0, 'Q'], [7, 'K'], [60, 'kq'], [56, 'q'], [63, 'k']])
+      if (m.from === sq || m.to === sq) for (const c of k) castle[c] = 0;
+    return { b, turn: white ? 'b' : 'w', castle, ep: m.flag === 'double' ? (m.from + m.to) / 2 : -1 };
+  }
+
+  function legal(s) {
+    const white = s.turn === 'w';
+    return pseudo(s).filter(m => {
+      const n = apply(s, m), k = n.b.indexOf(white ? 'K' : 'k');
+      return !attacked(n.b, k, !white);
+    });
+  }
+
+  // Vakjes waarvan de inhoud verandert door een zet (voor de camera)
+  function changed(m) {
+    const sq = [m.from, m.to];
+    if (m.flag === 'ep') sq.push(m.to + (m.to > m.from ? -8 : 8));
+    if (m.flag === 'castleK') sq.push(m.to + 1, m.to - 1);
+    if (m.flag === 'castleQ') sq.push(m.to - 2, m.to + 1);
+    return sq;
+  }
+
+  function label(s, m) {
+    if (m.flag === 'castleK') return 'O-O';
+    if (m.flag === 'castleQ') return 'O-O-O';
+    const p = s.b[m.from].toUpperCase(), cap = s.b[m.to] || m.flag === 'ep';
+    return (p === 'P' ? '' : ({ N: 'P', B: 'L', R: 'T', Q: 'D', K: 'K' })[p]) + name(m.from) + (cap ? 'x' : '-') + name(m.to) + (m.promo ? '=D' : '');
+  }
+
+  function inCheck(s) {
+    const white = s.turn === 'w';
+    return attacked(s.b, s.b.indexOf(white ? 'K' : 'k'), !white);
+  }
+
+  return { start, legal, apply, changed, label, name, inCheck };
+})();
+if (typeof module !== 'undefined') module.exports = Chess;
+
+</script>
+<script>
+{
+const $=id=>document.getElementById(id);
+const live=$('live'),lctx=live.getContext('2d');
+const off=document.createElement('canvas'),octx=off.getContext('2d',{willReadFrequently:true});
+const video=document.createElement('video');video.playsInline=true;video.muted=true;
+const N=320,S=N/8,FILES='abcdefgh',NAMES=['a1','h1','h8','a8'];
+let mode=null,photo=null,corners=[],H=null,lut=null,ref=null,cur=null,calibrating=false,scores=null;
+
+const msg=t=>{$('msg').textContent=t};
+const enable=()=>{const has=!!mode;$('bCal').disabled=!has;$('bRef').disabled=!(has&&H);$('bCur').disabled=!(has&&H&&ref);$('bNext').disabled=!cur;$('bRot').disabled=!H;$('bVRot').disabled=mode!=='video';$('bAuto').disabled=!(mode==='video'&&H);live.style.touchAction=(calibrating||!ref)?'none':'auto'};
+
+function setSize(w,h){
+  if(live.width!==w||live.height!==h){live.width=w;live.height=h;off.width=w;off.height=h;
+    if(H){H=null;lut=null;loadCal()}}
+}
+
+/* ---------- beeldbron ---------- */
+$('bCam').addEventListener('click',async()=>{
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    video.srcObject=s;await video.play();mode='video';photo=null;
+    setSize(...vidDims());loadCal();enable();
+    msg(H?'Kalibratie geladen. Rijd de robot weg en leg vóór vast.':'Camera aan. Druk op Kalibreren.');
+  }catch(e){msg(!window.isSecureContext?'Live camera werkt alleen via een https-adres, niet vanuit een gedownload bestand. Gebruik voorlopig Foto maken.':'Live camera lukt hier niet ('+e.name+'). Gebruik Foto maken.')}
+});
+// Telefoons die schuin naar beneden kijken draaien foto's soms 'automatisch' om (EXIF).
+// We zetten elke foto terug naar de echte sensorstand, zodat alle foto's gelijk liggen.
+function exifOri(buf){
+  const v=new DataView(buf);if(v.byteLength<4||v.getUint16(0)!==0xFFD8)return 1;
+  let o=2;
+  while(o<v.byteLength-10){
+    const m=v.getUint16(o),len=v.getUint16(o+2);
+    if(m===0xFFE1&&v.getUint32(o+4)===0x45786966){
+      const t=o+10,le=v.getUint16(t)===0x4949,ifd=t+v.getUint32(t+4,le),n=v.getUint16(ifd,le);
+      for(let i=0;i<n;i++){const e=ifd+2+i*12;if(v.getUint16(e,le)===0x0112)return v.getUint16(e+8,le)}
+      return 1;
+    }
+    if((m&0xFF00)!==0xFF00)break;o+=2+len;
+  }
+  return 1;
+}
+const onFile=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  let ori=1;try{ori=exifOri(await f.slice(0,262144).arrayBuffer())}catch(err){}
+  const img=new Image();
+  img.onload=()=>{
+    const hadH=!!H,w=img.naturalWidth,h=img.naturalHeight,sc=Math.min(1,1280/Math.max(w,h));
+    const side=ori>=5,c=document.createElement('canvas');
+    c.width=Math.round((side?h:w)*sc);c.height=Math.round((side?w:h)*sc);
+    const x=c.getContext('2d');x.translate(c.width/2,c.height/2);
+    x.rotate({3:Math.PI,4:Math.PI,5:-Math.PI/2,6:-Math.PI/2,7:Math.PI/2,8:Math.PI/2}[ori]||0);
+    x.drawImage(img,-w*sc/2,-h*sc/2,w*sc,h*sc);
+    photo=c;mode='photo';
+    setSize(c.width,c.height);loadCal();enable();
+    msg(hadH&&!H?'Let op: deze foto past niet bij de kalibratie (ander formaat). Kalibreer opnieuw.':!H?'Foto geladen. Druk op Kalibreren.':!ref?'Foto geladen. Druk op Vóór vastleggen.':'Foto geladen. Druk op Na vastleggen.');
+    URL.revokeObjectURL(img.src);e.target.value='';
+  };
+  img.src=URL.createObjectURL(f);
+};
+$('fileIn').addEventListener('change',onFile);$('fileCam').addEventListener('change',onFile);
+
+let vrot=false;
+try{vrot=localStorage.getItem('schaakvrot')==='1'}catch(e){}
+const vidDims=()=>vrot?[video.videoHeight,video.videoWidth]:[video.videoWidth,video.videoHeight];
+function drawSource(ctx){
+  if(mode==='video'){
+    if(vrot){ctx.save();ctx.translate(live.width,0);ctx.rotate(Math.PI/2);ctx.drawImage(video,0,0,live.height,live.width);ctx.restore()}
+    else ctx.drawImage(video,0,0,live.width,live.height);
+  }
+  else if(mode==='photo')ctx.drawImage(photo,0,0,live.width,live.height);
+}
+
+/* ---------- wiskunde: homografie ---------- */
+function solve(A,b){
+  const n=b.length;
+  for(let i=0;i<n;i++){
+    let p=i;for(let r=i+1;r<n;r++)if(Math.abs(A[r][i])>Math.abs(A[p][i]))p=r;
+    [A[i],A[p]]=[A[p],A[i]];[b[i],b[p]]=[b[p],b[i]];
+    for(let r=i+1;r<n;r++){const f=A[r][i]/A[i][i];for(let c=i;c<n;c++)A[r][c]-=f*A[i][c];b[r]-=f*b[i]}
+  }
+  const x=new Array(n);
+  for(let i=n-1;i>=0;i--){let s=b[i];for(let c=i+1;c<n;c++)s-=A[i][c]*x[c];x[i]=s/A[i][i]}
+  return x;
+}
+function homog(src,dst){
+  const A=[],b=[];
+  for(let i=0;i<4;i++){const[x,y]=src[i],[u,v]=dst[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]);b.push(u);A.push([0,0,0,x,y,1,-v*x,-v*y]);b.push(v)}
+  const h=solve(A,b);h.push(1);return h;
+}
+const map=(h,x,y)=>{const w=h[6]*x+h[7]*y+h[8];return[(h[0]*x+h[1]*y+h[2])/w,(h[3]*x+h[4]*y+h[5])/w]};
+
+function buildLut(){
+  const W=off.width,Hh=off.height;lut=new Int32Array(N*N);
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    const[u,v]=map(H,(i+.5)/S,8-(j+.5)/S),x=Math.round(u),y=Math.round(v);
+    lut[j*N+i]=(x>=0&&y>=0&&x<W&&y<Hh)?(y*W+x)*4:-1;
+  }
+}
+function finishCal(){H=homog([[0,0],[8,0],[8,8],[0,8]],corners);buildLut()}
+function saveCal(){try{localStorage.setItem('schaakcal',JSON.stringify({corners,w:live.width,h:live.height}))}catch(e){}}
+function loadCal(){
+  try{const c=JSON.parse(localStorage.getItem('schaakcal')||'null');
+    if(c&&c.w===live.width&&c.h===live.height&&c.corners.length===4){corners=c.corners;finishCal()}}catch(e){}
+}
+
+/* ---------- kalibreren ---------- */
+$('bCal').addEventListener('click',()=>{calibrating=true;live.style.touchAction='none';corners=[];H=null;lut=null;ref=null;cur=null;enable();
+  msg('Tik de 4 hoeken van de vakjes aan (niet de houten rand), in willekeurige volgorde. Houd vast en schuif tot het kruisje precies goed zit.')});
+let dragIdx=-1,loupe=null,dragStart=null,moved=false;
+const pos=e=>{const r=live.getBoundingClientRect();return[(e.clientX-r.left)*live.width/r.width,(e.clientY-r.top)*live.height/r.height]};
+live.addEventListener('pointerdown',e=>{
+  if(!mode)return;
+  const p=pos(e);
+  if(calibrating){corners.push(p);dragIdx=corners.length-1}
+  else if(corners.length===4&&!ref){
+    let best=-1,bd=live.width/12;
+    corners.forEach((c,i)=>{const d=Math.hypot(c[0]-p[0],c[1]-p[1]);if(d<bd){bd=d;best=i}});
+    if(best<0)return;dragIdx=best;corners[best]=p;
+  }else return;
+  loupe=p;dragStart=corners[dragIdx].slice();moved=calibrating;live.setPointerCapture(e.pointerId);e.preventDefault();
+});
+live.addEventListener('pointermove',e=>{
+  if(dragIdx<0)return;
+  const p=pos(e);corners[dragIdx]=p;loupe=p;
+  if(Math.hypot(p[0]-dragStart[0],p[1]-dragStart[1])>3)moved=true;
+});
+const release=()=>{
+  if(dragIdx<0)return;
+  dragIdx=-1;loupe=null;
+  if(!calibrating&&!moved){finishCal();return}
+  if(calibrating&&corners.length<4){msg('Goed, nog '+(4-corners.length)+' hoek'+(corners.length===3?'':'en')+'. Volgorde maakt niet uit.');return}
+  if(calibrating)corners=autoOrder(corners);
+  calibrating=false;finishCal();saveCal();ref=null;cur=null;scores=null;enable();
+  msg('Gekalibreerd. Valt het raster niet goed? Sleep een rode stip naar de juiste plek.');
+};
+live.addEventListener('pointerup',release);live.addEventListener('pointercancel',release);
+
+// Zet de 4 getikte hoeken zelf in de goede volgorde.
+// De langste rand in beeld is de rand het dichtst bij de camera.
+// Camera aan de kant van zwart: dichtbij-rechts = a8. Aan de kant van wit: dichtbij-links = a1.
+function autoOrder(pts){
+  const cx=pts.reduce((t,p)=>t+p[0],0)/4,cy=pts.reduce((t,p)=>t+p[1],0)/4;
+  const q=pts.slice().sort((a,b)=>Math.atan2(a[1]-cy,a[0]-cx)-Math.atan2(b[1]-cy,b[0]-cx)); // met de klok mee op het scherm
+  let best=0,bl=-1;
+  for(let i=0;i<4;i++){const a=q[i],b=q[(i+1)%4],l=Math.hypot(a[0]-b[0],a[1]-b[1]);if(l>bl){bl=l;best=i}}
+  const P=k=>q[(best+k)%4];
+  return $('camSide').value==='w'?[P(1),P(0),P(3),P(2)]:[P(3),P(2),P(1),P(0)];
+}
+$('camSide').addEventListener('change',()=>{if(corners.length===4&&!calibrating){corners=autoOrder(corners);finishCal();saveCal();ref=null;cur=null;scores=null;enable();msg('Kant aangepast. Leg vóór opnieuw vast.')}});
+
+/* ---------- vastleggen en vergelijken ---------- */
+function capture(){
+  drawSource(octx);
+  const d=octx.getImageData(0,0,off.width,off.height).data,out=new Float32Array(N*N*3);
+  let sum=0,n=0;
+  for(let k=0;k<N*N;k++){const p=lut[k];if(p<0)continue;
+    out[k*3]=d[p];out[k*3+1]=d[p+1];out[k*3+2]=d[p+2];sum+=d[p]+d[p+1]+d[p+2];n+=3}
+  const f=128/((sum/n)||1);            // helderheid gelijk trekken (wolkje, schaduw)
+  for(let k=0;k<out.length;k++)out[k]*=f;
+  return out;
+}
+function show(c,img){
+  const x=c.getContext('2d'),id=x.createImageData(N,N);
+  for(let k=0;k<N*N;k++){for(let q=0;q<3;q++)id.data[k*4+q]=Math.min(255,img[k*3+q]*.9);id.data[k*4+3]=255}
+  x.putImageData(id,0,0);x.strokeStyle='rgba(11,156,144,.8)';x.lineWidth=1;
+  for(let i=1;i<8;i++){x.beginPath();x.moveTo(i*S,0);x.lineTo(i*S,N);x.moveTo(0,i*S);x.lineTo(N,i*S);x.stroke()}
+  x.fillStyle='#0b9c90';x.font='bold 12px sans-serif';x.fillText('a1',3,N-4);x.fillText('h8',N-17,13);
+}
+function compare(){
+  const near=$('nearHalf').checked,a=Math.round(S*.15),b=Math.round(S*.85);
+  scores=[];
+  for(let r=7;r>=0;r--)for(let f=0;f<8;f++){
+    const j0=(7-r)*S,i0=f*S;let s=0,n=0;
+    // camera staat achter het bord (aan de kant van rij 8?) -> we weten niet welke kant 'voor' is,
+    // dus 'voorste helft' = de helft die het dichtst bij de camera ligt, bepaald via de kalibratie
+    const ys=near?nearRows(f,r,j0,a,b):[j0+a,j0+b];
+    for(let j=ys[0];j<ys[1];j++)for(let i=i0+a;i<i0+b;i++){const k=(j*N+i)*3;
+      s+=Math.abs(cur[k]-ref[k])+Math.abs(cur[k+1]-ref[k+1])+Math.abs(cur[k+2]-ref[k+2]);n++}
+    scores.push({sq:FILES[f]+(r+1),v:s/n/3});
+  }
+  guessMoves();
+  render();
+}
+// welke helft van het vakje ligt het dichtst bij de camera? (= onderaan in het camerabeeld)
+function nearRows(f,r,j0,a,b){
+  const top=map(H,f+.5,r+1)[1],bot=map(H,f+.5,r)[1];   // beeld-y van bovenrand (rij r+1) en onderrand (rij r)
+  const mid=j0+S/2;
+  return bot>top?[Math.round(mid),j0+b]:[j0+a,Math.round(mid)];
+}
+function render(){
+  if(!scores)return;
+  const t=+$('thr').value;$('thrV').textContent=t;
+  $('grid').innerHTML=scores.map(o=>{
+    const hot=o.v>=t,al=Math.min(1,o.v/(t*1.5));
+    const bg=hot?'var(--hot)':`rgba(11,156,144,${(al*.55).toFixed(2)})`;
+    const idx=FILES.indexOf(o.sq[0])+(+o.sq[1]-1)*8,ol=hl.includes(idx)?';outline:3px solid var(--ink)':'';
+    return `<div style="background:${bg};color:${hot?'#fff':'inherit'}${ol}">${o.sq}<b>${Math.round(o.v)}</b></div>`;
+  }).join('');
+  const hits=scores.filter(o=>o.v>=t).sort((p,q)=>q.v-p.v);
+  $('result').textContent=!hits.length?'Geen veranderde vakjes boven de drempel.':
+    hits.length===2?`Waarschijnlijk een zet tussen ${hits[0].sq} en ${hits[1].sq}.`:
+    `Veranderd: ${hits.slice(0,6).map(o=>o.sq).join(', ')}${hits.length>6?' …':''} (${hits.length} vakjes)`;
+}
+$('bRef').addEventListener('click',()=>{ref=capture();cur=null;scores=null;show($('cRef'),ref);{const c=$('cCur');c.getContext('2d').clearRect(0,0,c.width,c.height)}
+  $('grid').innerHTML='';$('result').textContent='Vóór vastgelegd. Doe een zet.';enable();msg('Vóór vastgelegd.')});
+$('bCur').addEventListener('click',()=>{try{cur=capture();show($('cCur'),cur);compare();enable();msg('Na vastgelegd en vergeleken.')}catch(err){msg('Fout bij vergelijken: '+err.message)}});
+$('bNext').addEventListener('click',()=>{ref=cur;cur=null;scores=null;show($('cRef'),ref);
+  $('result').textContent='Klaar voor de volgende zet.';$('grid').innerHTML='';enable()});
+$('thr').addEventListener('input',render);
+$('nearHalf').addEventListener('change',()=>{if(ref&&cur)compare()});
+
+$('bRot').addEventListener('click',()=>{
+  if(corners.length!==4)return;
+  corners.push(corners.shift());finishCal();saveCal();
+  const rot=a=>{if(!a)return a;const o=new Float32Array(a.length);
+    for(let j=0;j<N;j++)for(let i=0;i<N;i++){const q=((N-1-i)*N+j)*3,d=(j*N+i)*3;o[d]=a[q];o[d+1]=a[q+1];o[d+2]=a[q+2]}return o};
+  ref=rot(ref);cur=rot(cur);
+  if(ref)show($('cRef'),ref);
+  if(cur){show($('cCur'),cur);compare()}
+  msg('Bord 90° gedraaid. Wit moet onderaan staan (rij 1-2, bij a1), zwart bovenaan.');
+});
+
+/* ---------- draai camerabeeld ---------- */
+$('bVRot').addEventListener('click',()=>{vrot=!vrot;try{localStorage.setItem('schaakvrot',vrot?'1':'0')}catch(e){}
+  setSize(...vidDims());loadCal();ref=null;cur=null;scores=null;enable();
+  msg(H?'Beeld gedraaid.':'Beeld gedraaid. Kalibreer opnieuw.')});
+
+/* ---------- automatisch vastleggen ---------- */
+let auto=false,aState='idle',prevSmall=null,stillSince=0,baseline=2,timer=null;
+function small(){
+  drawSource(octx);const d=octx.getImageData(0,0,off.width,off.height).data,out=new Float32Array(4096);let sum=0;
+  for(let j=0;j<64;j++)for(let i=0;i<64;i++){const p=lut[(j*5+2)*N+(i*5+2)],g=p<0?0:d[p]+d[p+1]+d[p+2];out[j*64+i]=g;sum+=g}
+  const m=sum/4096||1;for(let k=0;k<4096;k++)out[k]/=m;return out;
+}
+function evaluateAuto(){
+  cur=capture();show($('cCur'),cur);compare();enable();
+  const vals=scores.map(o=>o.v),med=vals.slice().sort((a,b)=>a-b)[32],mx=Math.max(...vals);
+  const big=vals.filter(x=>x>med+0.5*(mx-med)&&x-med>15).length;
+  if(big>8){msg('Er verandert veel tegelijk: is er nog een hand in beeld?');return}
+  const best=cands[0],second=cands[1]?cands[1].s:0;
+  if(!best||best.s<6){ref=cur;cur=null;show($('cRef'),ref);aState='idle';msg('Geen zet gezien.');return}
+  if(best.s>=12&&best.s>=1.6*second){
+    const lab=Chess.label(game,best.m);doMove(best.m);aState='idle';
+    try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
+    msg('Automatisch herkend: '+lab);return;
+  }
+  aState='wait';msg('Twijfel. Tik de juiste zet aan bij Partij, of doe de zet opnieuw.');
+}
+function tick(){
+  if(!auto||mode!=='video'||!H||!lut)return;
+  const sm=small();let mot=0;
+  if(prevSmall&&prevSmall.length===sm.length){for(let k=0;k<4096;k++)mot+=Math.abs(sm[k]-prevSmall[k]);mot=mot/4096*100}
+  prevSmall=sm;
+  const now=performance.now(),moving=mot>Math.max(2.5,baseline*3);
+  if(aState==='idle'||aState==='wait'){
+    if(!moving){baseline=baseline*.9+mot*.1;
+      if(!ref){ref=capture();show($('cRef'),ref);enable();msg('Startbeeld vastgelegd. Doe een zet.')}}
+    else{aState='busy';stillSince=0}
+  }else if(aState==='busy'){
+    if(moving)stillSince=0;
+    else if(!stillSince)stillSince=now;
+    else if(now-stillSince>1500){stillSince=0;evaluateAuto()}
+  }
+  const txt={idle:'wacht op een zet',busy:'beweging gezien, wacht tot het stil is',wait:'twijfel, kies een zet'}[aState];
+  $('autoStat').textContent='Automatisch: '+txt+' · beweging '+mot.toFixed(1)+' (drempel '+Math.max(2.5,baseline*3).toFixed(1)+')';
+}
+$('bAuto').addEventListener('click',()=>{
+  auto=!auto;$('bAuto').textContent='Automatisch: '+(auto?'aan':'uit');
+  clearInterval(timer);prevSmall=null;aState='idle';stillSince=0;
+  if(auto){timer=setInterval(tick,300);msg('Automatisch aan. Houd handen even weg voor het startbeeld.')}
+  else $('autoStat').textContent='';
+});
+
+/* ---------- partij ---------- */
+let game=Chess.start(),hist=[],stack=[],cands=[],hl=[];
+const GLYPH={K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
+function saveGame(){try{localStorage.setItem('schaakpartij',JSON.stringify({game,hist,stack}))}catch(e){}}
+function loadGame(){try{const g=JSON.parse(localStorage.getItem('schaakpartij')||'null');if(g&&g.game){game=g.game;hist=g.hist||[];stack=g.stack||[]}}catch(e){}}
+function drawPos(){
+  let h='';
+  for(let r=7;r>=0;r--)for(let f=0;f<8;f++){const sq=r*8+f,p=game.b[sq];
+    h+=`<div class="${(r+f)%2?'lt':'dk'}${hl.includes(sq)?' hl':''}">${p?GLYPH[p]:''}</div>`}
+  $('pos').innerHTML=h;
+  const n=Chess.legal(game).length,chk=Chess.inCheck(game),side=game.turn==='w'?'Wit':'Zwart';
+  $('turn').textContent=!n?(chk?'Schaakmat! '+(game.turn==='w'?'Zwart':'Wit')+' wint.':'Pat: remise.'):side+' aan zet'+(chk?' (schaak!)':'');
+  $('hist').textContent=hist.length?'Zetten: '+hist.map((m,i)=>(i%2===0?(i/2+1)+'. ':'')+m).join(' '):'';
+}
+function guessMoves(){
+  const v=new Array(64);
+  scores.forEach(o=>{v[FILES.indexOf(o.sq[0])+(+o.sq[1]-1)*8]=o.v});
+  const med=v.slice().sort((a,b)=>a-b)[32];
+  const c=Chess.legal(game).map(m=>{const sq=Chess.changed(m);return{m,sq,s:sq.reduce((t,q)=>t+v[q]-med,0)/sq.length}}).sort((a,b)=>b.s-a.s);
+  cands=c.slice(0,3);hl=[];
+  if(!c.length){$('moveRes').textContent='Geen legale zetten meer: de partij is afgelopen.';$('cands').innerHTML='';drawPos();return}
+  const best=c[0],gap=best.s-(c[1]?c[1].s:0);
+  hl=best.sq;
+  $('moveRes').textContent=best.s<6?'Geen duidelijke zet gezien. Kies hieronder, of maak de foto opnieuw.':
+    'Herkende zet: '+Chess.label(game,best.m)+(gap<4?' (twijfel, controleer even)':'');
+  $('cands').innerHTML=cands.map((o,i)=>`<button data-i="${i}" class="${i===0?'pri':''}">${i===0?'Bevestig ':''}${Chess.label(game,o.m)} <small style="opacity:.7">&nbsp;${Math.round(o.s)}</small></button>`).join('');
+  drawPos();
+}
+function doMove(m){
+  aState='idle';stack.push(game);hist.push(Chess.label(game,m));game=Chess.apply(game,m);hl=[];cands=[];
+  $('cands').innerHTML='';$('moveRes').textContent='Gespeeld: '+hist[hist.length-1]+'. Doe de volgende zet en leg na vast.';
+  if(cur){ref=cur;cur=null;scores=null;show($('cRef'),ref);const c=$('cCur');c.getContext('2d').clearRect(0,0,c.width,c.height);$('grid').innerHTML=''}
+  enable();saveGame();drawPos();
+}
+$('cands').addEventListener('click',e=>{const b=e.target.closest('button');if(b&&cands[+b.dataset.i])doMove(cands[+b.dataset.i].m)});
+$('bNew').addEventListener('click',()=>{game=Chess.start();hist=[];stack=[];hl=[];cands=[];$('cands').innerHTML='';$('moveRes').textContent='Nieuwe partij. Leg vóór vast.';saveGame();drawPos()});
+$('bSide').addEventListener('click',()=>{game=Object.assign({},game,{turn:game.turn==='w'?'b':'w',ep:-1});saveGame();drawPos()});
+$('bUndo').addEventListener('click',()=>{if(!stack.length)return;game=stack.pop();hist.pop();hl=[];saveGame();drawPos();$('moveRes').textContent='Zet teruggenomen.'});
+loadGame();drawPos();
+
+/* ---------- tekenlus ---------- */
+function loop(){
+  if(mode){
+    if(mode==='video'){const[w,h]=vidDims();if(w&&(w!==live.width||h!==live.height)){setSize(w,h);enable()}}
+    drawSource(octx);lctx.drawImage(off,0,0);
+    lctx.lineWidth=Math.max(2,live.width/400);
+    if(H){lctx.strokeStyle='rgba(11,200,185,.9)';
+      for(let k=0;k<=8;k++){for(const[p,q]of[[[k,0],[k,8]],[[0,k],[8,k]]]){
+        const A=map(H,...p),B=map(H,...q);lctx.beginPath();lctx.moveTo(...A);lctx.lineTo(...B);lctx.stroke()}}
+      const p=map(H,.5,.5);lctx.fillStyle='#fff';lctx.font=`bold ${Math.round(live.width/40)}px sans-serif`;lctx.fillText('a1',p[0]-10,p[1]+6);
+    }
+    lctx.fillStyle='#e2552f';
+    corners.forEach(([x,y],i)=>{lctx.beginPath();lctx.arc(x,y,live.width/100,0,7);lctx.fill();
+      if(calibrating||!H)lctx.fillText(NAMES[i],x+8,y-8)});
+    if(loupe){
+      const W=live.width,z=3,box=Math.round(W*.3),src=box/z,[lx,ly]=loupe;
+      const bx=lx<W/2?W-box-10:10,by=10;
+      lctx.save();lctx.fillStyle='#000';lctx.fillRect(bx-2,by-2,box+4,box+4);
+      lctx.beginPath();lctx.rect(bx,by,box,box);lctx.clip();
+      lctx.drawImage(off,lx-src/2,ly-src/2,src,src,bx,by,box,box);
+      lctx.strokeStyle='#e2552f';lctx.lineWidth=2;lctx.beginPath();
+      lctx.moveTo(bx+box/2,by);lctx.lineTo(bx+box/2,by+box);lctx.moveTo(bx,by+box/2);lctx.lineTo(bx+box,by+box/2);lctx.stroke();
+      lctx.restore();
+    }
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
