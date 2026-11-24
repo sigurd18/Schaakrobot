@@ -78,6 +78,15 @@ ol{margin:6px 0 0;padding-left:20px;color:var(--mut);font-size:15px}
   <div id="pos"></div>
   <p id="moveRes">Leg vóór en na vast om een zet te herkennen.</p>
   <div id="cands" class="btns"></div>
+  <div id="robotBox" style="margin:12px 0 4px;padding:10px 12px;border-radius:10px;background:var(--bg)">
+    <div class="btns" style="align-items:center">
+      <label class="filebtn" style="gap:6px">Robot speelt<select id="robotSide" style="font:inherit;font-size:16px;background:transparent;color:inherit;border:0"><option value="b">zwart</option><option value="w">wit</option><option value="-">niet</option></select></label>
+      <label style="margin:0;flex:1;min-width:150px">Sterkte: <span id="lvlV">5</span><input id="lvl" type="range" min="0" max="20" value="5"></label>
+    </div>
+    <p id="robotRes" style="font-size:20px;font-weight:700;margin:8px 0 6px"></p>
+    <div class="btns"><button id="bDone" class="pri" style="display:none">Robotzet is uitgevoerd</button></div>
+    <p id="engStat" class="lbl" style="margin:6px 0 0"></p>
+  </div>
   <p id="hist" class="lbl" style="margin-top:10px"></p>
   <div class="btns" style="margin-top:8px"><button id="bNew">Nieuwe partij</button><button id="bSide">Wissel wie aan zet is</button><button id="bUndo">Zet terugnemen</button></div>
 </div>
@@ -246,6 +255,48 @@ const Chess = (() => {
   return { start, legal, apply, changed, label, name, inCheck };
 })();
 if (typeof module !== 'undefined') module.exports = Chess;
+// Eenvoudig reservebrein (als Stockfish niet laadt): alfa-bèta zoeken met materiaal + positie.
+const Engine = (() => {
+  const VAL = { P: 100, N: 320, B: 330, R: 500, Q: 900, K: 0 };
+  function evalPos(s) {
+    let e = 0;
+    for (let sq = 0; sq < 64; sq++) {
+      const p = s.b[sq]; if (!p) continue;
+      const t = p.toUpperCase(), w = p === t, f = sq & 7, r = sq >> 3;
+      let v = VAL[t];
+      if (t === 'P') v += (w ? r - 1 : 6 - r) * 10 + (f > 1 && f < 6 ? 5 : 0);
+      if (t === 'N' || t === 'B') v += 14 - (Math.abs(3.5 - f) + Math.abs(3.5 - r)) * 4;
+      e += w ? v : -v;
+    }
+    return s.turn === 'w' ? e : -e;
+  }
+  const capVal = (s, m) => s.b[m.to] ? VAL[s.b[m.to].toUpperCase()] : 0;
+  function search(s, d, a, b) {
+    const ms = Chess.legal(s);
+    if (!ms.length) return Chess.inCheck(s) ? -100000 - d : 0;
+    if (!d) return evalPos(s);
+    ms.sort((x, y) => capVal(s, y) - capVal(s, x));
+    for (const m of ms) {
+      const v = -search(Chess.apply(s, m), d - 1, -b, -a);
+      if (v >= b) return v;
+      if (v > a) a = v;
+    }
+    return a;
+  }
+  function best(s, d) {
+    const ms = Chess.legal(s);
+    for (let i = ms.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ms[i], ms[j]] = [ms[j], ms[i]]; }
+    ms.sort((x, y) => capVal(s, y) - capVal(s, x));
+    let bm = null, a = -1e9;
+    for (const m of ms) {
+      const v = -search(Chess.apply(s, m), d - 1, -1e9, -a);
+      if (!bm || v > a) { a = v; bm = m; }
+    }
+    return bm;
+  }
+  return { best };
+})();
+
 
 </script>
 <script>
@@ -524,7 +575,7 @@ $('bAuto').addEventListener('click',()=>{
 });
 
 /* ---------- partij ---------- */
-let game=Chess.start(),hist=[],stack=[],cands=[],hl=[];
+let game=Chess.start(),hist=[],stack=[],cands=[],hl=[],expected=null;
 const GLYPH={K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
 function saveGame(){try{localStorage.setItem('schaakpartij',JSON.stringify({game,hist,stack}))}catch(e){}}
 function loadGame(){try{const g=JSON.parse(localStorage.getItem('schaakpartij')||'null');if(g&&g.game){game=g.game;hist=g.hist||[];stack=g.stack||[]}}catch(e){}}
@@ -541,7 +592,7 @@ function guessMoves(){
   const v=new Array(64);
   scores.forEach(o=>{v[FILES.indexOf(o.sq[0])+(+o.sq[1]-1)*8]=o.v});
   const med=v.slice().sort((a,b)=>a-b)[32];
-  const c=Chess.legal(game).map(m=>{const sq=Chess.changed(m);return{m,sq,s:sq.reduce((t,q)=>t+v[q]-med,0)/sq.length}}).sort((a,b)=>b.s-a.s);
+  const c=Chess.legal(game).map(m=>{const sq=Chess.changed(m);let sc=sq.reduce((t,q)=>t+v[q]-med,0)/sq.length;if(expected&&m.from===expected.from&&m.to===expected.to)sc+=8;return{m,sq,s:sc}}).sort((a,b)=>b.s-a.s);
   cands=c.slice(0,3);hl=[];
   if(!c.length){$('moveRes').textContent='Geen legale zetten meer: de partij is afgelopen.';$('cands').innerHTML='';drawPos();return}
   const best=c[0],gap=best.s-(c[1]?c[1].s:0);
@@ -555,13 +606,66 @@ function doMove(m){
   aState='idle';stack.push(game);hist.push(Chess.label(game,m));game=Chess.apply(game,m);hl=[];cands=[];
   $('cands').innerHTML='';$('moveRes').textContent='Gespeeld: '+hist[hist.length-1]+'. Doe de volgende zet en leg na vast.';
   if(cur){ref=cur;cur=null;scores=null;show($('cRef'),ref);const c=$('cCur');c.getContext('2d').clearRect(0,0,c.width,c.height);$('grid').innerHTML=''}
-  enable();saveGame();drawPos();
+  if(expected&&m.from===expected.from&&m.to===expected.to)$('robotRes').textContent='';
+  expected=null;$('bDone').style.display='none';
+  enable();saveGame();drawPos();thinkRobot();
 }
 $('cands').addEventListener('click',e=>{const b=e.target.closest('button');if(b&&cands[+b.dataset.i])doMove(cands[+b.dataset.i].m)});
-$('bNew').addEventListener('click',()=>{game=Chess.start();hist=[];stack=[];hl=[];cands=[];$('cands').innerHTML='';$('moveRes').textContent='Nieuwe partij. Leg vóór vast.';saveGame();drawPos()});
-$('bSide').addEventListener('click',()=>{game=Object.assign({},game,{turn:game.turn==='w'?'b':'w',ep:-1});saveGame();drawPos()});
-$('bUndo').addEventListener('click',()=>{if(!stack.length)return;game=stack.pop();hist.pop();hl=[];saveGame();drawPos();$('moveRes').textContent='Zet teruggenomen.'});
-loadGame();drawPos();
+$('bNew').addEventListener('click',()=>{game=Chess.start();hist=[];stack=[];hl=[];cands=[];$('cands').innerHTML='';$('moveRes').textContent='Nieuwe partij. Leg vóór vast.';expected=null;saveGame();drawPos();thinkRobot()});
+$('bSide').addEventListener('click',()=>{game=Object.assign({},game,{turn:game.turn==='w'?'b':'w',ep:-1});expected=null;saveGame();drawPos();thinkRobot()});
+$('bUndo').addEventListener('click',()=>{if(!stack.length)return;game=stack.pop();hist.pop();hl=[];saveGame();drawPos();$('moveRes').textContent='Zet teruggenomen.';expected=null;thinkRobot()});
+/* ---------- brein: Stockfish, met reservebrein ---------- */
+let sf=null,sfReady=false,sfCb=null,thinkId=0;
+function fen(s){
+  let pl='';
+  for(let r=7;r>=0;r--){let e=0;for(let f=0;f<8;f++){const p=s.b[r*8+f];if(!p)e++;else{if(e){pl+=e;e=0}pl+=p}}if(e)pl+=e;if(r)pl+='/'}
+  const c=(s.castle.K?'K':'')+(s.castle.Q?'Q':'')+(s.castle.k?'k':'')+(s.castle.q?'q':'')||'-';
+  return pl+' '+s.turn+' '+c+' '+(s.ep>=0?Chess.name(s.ep):'-')+' 0 '+(1+Math.floor(hist.length/2));
+}
+function initSF(){
+  try{
+    const code="importScripts('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js');";
+    sf=new Worker(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));
+    sf.onmessage=e=>{const l=String(e.data);
+      if(l==='uciok'||l==='readyok'){if(!sfReady){sfReady=true;$('engStat').textContent='Brein: Stockfish';thinkRobot()}}
+      if(l.startsWith('bestmove')&&sfCb){const cb=sfCb;sfCb=null;cb(l.split(' ')[1])}};
+    sf.onerror=()=>{sf=null;sfReady=false;$('engStat').textContent='Brein: eenvoudig (Stockfish laadt niet)'};
+    sf.postMessage('uci');sf.postMessage('isready');
+    $('engStat').textContent='Stockfish laden…';
+    setTimeout(()=>{if(!sfReady)$('engStat').textContent='Brein: eenvoudig (Stockfish laadt niet)'},10000);
+  }catch(e){sf=null;$('engStat').textContent='Brein: eenvoudig'}
+}
+function thinkRobot(){
+  const side=$('robotSide').value,id=++thinkId;
+  if(side!==game.turn||!Chess.legal(game).length){if(!expected)$('robotRes').textContent=side==='-'?'':'Jij bent aan zet.';return}
+  $('robotRes').textContent='Robot denkt na…';$('bDone').style.display='none';
+  const lvl=+$('lvl').value;
+  const done=m=>{if(id!==thinkId||!m)return;
+    expected=m;hl=Chess.changed(m);
+    $('robotRes').textContent='Robot speelt: '+Chess.label(game,m);
+    $('bDone').style.display='';drawPos();
+    try{navigator.vibrate&&navigator.vibrate([60,60,60])}catch(e){}
+  };
+  const fallback=()=>done(Engine.best(game,lvl>=12?4:lvl>=4?3:2));
+  if(sf&&sfReady){
+    sf.postMessage('setoption name Skill Level value '+lvl);
+    sf.postMessage('position fen '+fen(game));
+    sf.postMessage('go movetime '+(300+lvl*60));
+    sfCb=uci=>{const m=Chess.legal(game).find(x=>Chess.name(x.from)+Chess.name(x.to)===uci.slice(0,4));m?done(m):fallback()};
+    setTimeout(()=>{if(sfCb&&id===thinkId){sfCb=null;fallback()}},8000);
+  }else setTimeout(fallback,30);
+}
+$('bDone').addEventListener('click',()=>{
+  if(!expected)return;const m=expected;doMove(m);
+  if(mode==='video'&&auto){ref=null;cur=null;msg('Robotzet verwerkt. Handen weg, dan legt hij het nieuwe beeld vast.')}
+  else if(mode==='video'){ref=capture();show($('cRef'),ref);enable()}
+  else msg('Robotzet verwerkt. Maak een nieuwe foto en leg vóór vast.');
+});
+$('robotSide').addEventListener('change',()=>{try{localStorage.setItem('schaakrobotkant',$('robotSide').value)}catch(e){}expected=null;$('bDone').style.display='none';thinkRobot()});
+$('lvl').addEventListener('input',()=>{$('lvlV').textContent=$('lvl').value;try{localStorage.setItem('schaaklvl',$('lvl').value)}catch(e){}});
+try{const rs=localStorage.getItem('schaakrobotkant');if(rs)$('robotSide').value=rs;const lv=localStorage.getItem('schaaklvl');if(lv){$('lvl').value=lv;$('lvlV').textContent=lv}}catch(e){}
+
+loadGame();drawPos();initSF();thinkRobot();
 
 /* ---------- tekenlus ---------- */
 function loop(){
