@@ -105,7 +105,7 @@ ol{margin:6px 0 0;padding-left:20px;color:var(--mut);font-size:15px}
   <p id="result">Nog geen vergelijking.</p>
   <label for="thr">Drempel: <span id="thrV">22</span></label>
   <input id="thr" type="range" min="5" max="80" value="22">
-  <label><input id="nearHalf" type="checkbox" checked style="width:auto;height:auto"> Alleen de voorste helft van elk vakje meten (minder last van hoge stukken die erachter vallen)</label>
+  <label><input id="nearHalf" type="checkbox" checked style="width:auto;height:auto"> Alleen de achterste helft van elk vakje meten (verst van de camera; minder last van stukken ervoor)</label>
 </div>
 
 <div class="card">
@@ -488,7 +488,8 @@ function compare(){
 function nearRows(f,r,j0,a,b){
   const top=map(H,f+.5,r+1)[1],bot=map(H,f+.5,r)[1];   // beeld-y van bovenrand (rij r+1) en onderrand (rij r)
   const mid=j0+S/2;
-  return bot>top?[Math.round(mid),j0+b]:[j0+a,Math.round(mid)];
+  // de helft VERDER van de camera: daar staat het lijf van het eigen stuk, en vallen geen koppen van stukken ervoor
+  return bot>top?[j0+a,Math.round(mid)]:[Math.round(mid),j0+b];
 }
 function render(){
   if(!scores)return;
@@ -542,7 +543,8 @@ function evaluateAuto(){
   if(big>8){msg('Er verandert veel tegelijk: is er nog een hand in beeld?');return}
   const best=cands[0],second=cands[1]?cands[1].s:0;
   if(!best||best.s<6){ref=cur;cur=null;show($('cRef'),ref);aState='idle';msg('Geen zet gezien.');return}
-  if(best.s>=12&&best.s>=1.6*second){
+  // zetten met hetzelfde van-vakje (bijv. paardzetten) delen de helft van hun score, dus kijk naar het verschil
+  if(best.s>=12&&best.s-second>=Math.max(5,best.s*0.1)){
     const lab=Chess.label(game,best.m);doMove(best.m);aState='idle';
     try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
     msg('Automatisch herkend: '+lab);return;
